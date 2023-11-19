@@ -1,0 +1,250 @@
+---
+title: "Análisis experimento Fusarium"
+---
+
+# Session setup 
+
+Cargamos paquetes de utilidad para esta sesión y configuramos la estetica global de los graficos. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(rio, tidyverse,  # manipulacion general de datos
+               lme4,       # ajuste de modelos mixtos
+               DHARMa,     # diagnosticos de GLM
+               performance,# diagnosticos de LM 
+               sjPlot,     # visualizacion de outputs
+               emmeans,    # medias predichas por los modelos y comparaciones
+               ggeffects,  # predicciones
+               multcomp, multcompView)   # letras de test de comparaciones multiples
+
+
+```
+
+#Cargue de base de datos
+
+```{r}
+library(readxl)
+
+datafusarium <- read_excel("datos fusarium gulupa.xlsx")
+datafusarium <- datafusarium %>% 
+  separate_wider_delim(TOMA, delim = " ", names = c("DDT", "unit"))%>%
+  mutate_at(vars(TRATAMIENTO, BLOQUE), as.factor)%>%
+  mutate_at(vars(DDT), as.numeric)%>%
+  arrange(DDT)
+
+View(datafusarium)
+summary(datafusarium)
+
+
+```
+#Datos hasta DDT 51
+```{r}
+datafusarium_DDT51 <-datafusarium %>%
+  filter(DDT <= 51)
+```
+
+#Datos agrupados (proporción)
+```{r}
+calcular_proporcion <- function(x) {
+  return(sum(x)/length(x))
+}
+
+calcular_indice <- function(x){
+  contador<-table(x)
+  cantidad_1<-contador["1"]
+  cantidad_2<-contador["2"]
+  cantidad_3<-contador["3"]
+  cantidad_4<-0
+  indice<-((cantidad_1*1) + (cantidad_2*2) + (cantidad_3*3) + (cantidad_4*4))/(length(x)*4)
+  return(indice)
+}
+datafusarium_agrupados<- datafusarium %>% 
+  group_by(BLOQUE, DDT, TRATAMIENTO)%>%
+  reframe(incidencia_prop = calcular_proporcion(INCIDENCIA), n = length(INCIDENCIA), indice_severidad= SEVERIDAD )
+
+view(datafusarium_agrupados)
+```
+
+#Datos agrupados hasta DDT 51
+```{r}
+datafusarium_agrupados_DDT51 <-datafusarium_agrupados %>%
+  filter(DDT <= 51)
+```
+
+#Datos agrupados hasta DDT 48
+```{r}
+datafusarium_agrupados_DDT48 <-datafusarium_agrupados %>%
+  filter(DDT <= 48)
+```
+
+#Visualización de los datos agrupados
+
+```{r}
+ggplot(datafusarium_agrupados_DDT48, aes(x=DDT, y=incidencia_prop, color=BLOQUE) )  + geom_point(aes(shape=TRATAMIENTO)) 
+
+```
+
+
+#ajuste al modelo mixto con distrubución Bernoulli
+
+```{r}
+
+modelo1 <- glmer(INCIDENCIA ~ TRATAMIENTO * DDT + 
+                     (1|BLOQUE),
+                   family="binomial",
+                   data=datafusarium)
+modelo2<- glmer(INCIDENCIA ~ TRATAMIENTO * DDT + 
+                     (1|BLOQUE) + (1|planta),
+                   family="binomial",
+                   data=datafusarium)
+modelo3<- glmer(INCIDENCIA ~ TRATAMIENTO * DDT + 
+                     (1|BLOQUE) + (1|planta) + (1|BLOQUE:TRATAMIENTO),
+                   family="binomial",
+                   data=datafusarium)
+
+```
+
+#Elección del modelo 
+```{r}
+anova(modelo1, modelo2, modelo3, test = "Chisq")
+AIC(modelo1, modelo2, modelo3)
+
+#Se elige el modelo 3
+```
+
+#pruebas de validación
+
+```{r}
+residuos_modelo3<-resid(modelo3, type="pearson")
+qqnorm(residuos_modelo3, main = "QQ-plot de Residuos")
+qqline(residuos_modelo3)
+
+#los que estaban ya en el ejemplo
+testOutliers(modelo3)
+testDispersion(modelo3)
+
+```
+#Summary y prueba de deviancia
+
+```{r}
+summary(modelo3)
+car::Anova(modelo3)
+```
+
+
+#tabmodel y grafico
+```{r}
+tab_model(modelo3)
+plot_model(modelo3, 
+           terms = c("DDT", "TRATAMIENTO"), 
+           type='pred', show.data=F)
+```
+
+
+
+#predicción de valores en escala real
+```{r}
+ggpredict(modelo3, c( "DDT", "TRATAMIENTO"))
+```
+
+# Valores en escala real por inervalo  de tiempo
+
+```{r}
+ggpredict(modelo3, 
+          terms = "DDT [13:48]", 
+          condition = c(TRATAMIENTO = c("150 Si")))
+```
+
+# Valores en escala real para los tratamiento en un tiempo determinado
+
+```{r}
+plot(ggpredict(modelo3, 
+          terms = "TRATAMIENTO", 
+          condition = c(DDT = "13")))
+```
+
+# Valores en escala real emmeans y contrastes
+
+```{r}
+em1 <- emmeans(modelo3, ~ TRATAMIENTO, type="response")
+res1 <- cld(em1, Letters = letters, alpha = .05, type = "response")
+knitr::kable(res1)
+```
+
+#Análisis de datos agrupados##############################################################
+
+#ajuste al modelo mixto con distrubución Binomial
+
+```{r}
+modelo1_gruped <- glmer(incidencia_prop ~ TRATAMIENTO * DDT + 
+                     (1|BLOQUE),
+                   family="binomial",
+                   weights = n,
+                   data=datafusarium_agrupados_DDT48)
+
+modelo1_gruped_DDT_
+```
+#pruebas de validación
+
+```{r}
+residuos_modelo1_gruped<-resid(modelo1_gruped, type="pearson")
+qqnorm(residuos_modelo1_gruped, main = "QQ-plot de Residuos")
+qqline(residuos_modelo1_gruped)
+
+#los que estaban ya en el ejemplo
+testOutliers(modelo1_gruped)
+testDispersion(modelo1_gruped)
+
+```
+#Summary y prueba de deviancia
+
+```{r}
+summary(modelo1_gruped)
+car::Anova(modelo1_gruped)
+```
+
+
+#tabmodel y grafico
+```{r}
+tab_model(modelo1_gruped)
+plot_model(modelo1_gruped, 
+           terms = c("DDT", "TRATAMIENTO"), 
+           type='pred', show.data=F)
+```
+
+#predicción de valores en escala real
+```{r}
+plot(ggpredict(modelo1_gruped, c( "DDT", "TRATAMIENTO"))) + ylab("Incidencia") + ggtitle("")
+```
+
+# Valores en escala real por inervalo  de tiempo
+
+```{r}
+ggpredict(modelo1_gruped, 
+          terms = "DDT[13:48]", 
+          condition = c(TRATAMIENTO = c("150 Si")))
+```
+
+# Valores en escala real para los tratamiento en un tiempo determinado
+
+```{r}
+plot(ggpredict(modelo1_gruped, 
+          terms = "TRATAMIENTO", 
+          condition = c(DDT= "13"))) + ylab("Incidencia") + ggtitle("")
+```
+
+# Valores en escala real emmeans y contrastes
+
+```{r}
+em1 <- emmeans(modelo1_gruped, ~ TRATAMIENTO, type="response")
+res1 <- cld(em1, Letters = letters, alpha = .05, type = "response")
+knitr::kable(res1)
+```
+#Severidad################################################################################
+
+
+
+#----------------------------
+## FIN 
+
